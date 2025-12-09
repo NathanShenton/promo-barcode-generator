@@ -53,8 +53,14 @@ def generate_barcode_image(
 ) -> Image.Image:
     """
     Generate a PIL Image for a given barcode value.
-    Uses Code128 and resizes to requested dimensions if provided.
+    Uses Code128 and resizes while keeping aspect ratio.
+    Text is clearly below the bars, not overlapping.
     """
+    import io
+    from barcode import Code128
+    from barcode.writer import ImageWriter
+
+    # Generate barcode into an in-memory buffer as JPEG
     buffer = io.BytesIO()
     code = Code128(barcode_value, writer=ImageWriter())
     code.write(
@@ -62,20 +68,55 @@ def generate_barcode_image(
         {
             "format": "JPEG",
             "dpi": dpi,
-            "module_width": 0.2,
-            "module_height": 15,
-            "font_size": 12,
-            "text_distance": 1,
+            # Tweak these to give enough room for the text
+            "module_width": 0.2,     # bar thinness
+            "module_height": 40.0,   # bar height (bigger so text is clearly below)
+            "font_size": 18,         # text size
+            "text_distance": 6,      # gap between bars and text
+            "quiet_zone": 6.0,       # blank space left/right so digits aren’t cut off
         },
     )
 
     buffer.seek(0)
-    img = Image.open(buffer)
+    img = Image.open(buffer).convert("RGB")  # ensure RGB for JPEG
 
+    # If no custom size requested, return as-is
+    if not width_px and not height_px:
+        return img
+
+    orig_w, orig_h = img.size
+
+    # --- Maintain aspect ratio when scaling ---
     if width_px and height_px:
-        img = img.resize((width_px, height_px), Image.LANCZOS)
+        # Fit inside the given box, keep aspect ratio
+        scale = min(width_px / orig_w, height_px / orig_h)
+        new_w = max(1, int(orig_w * scale))
+        new_h = max(1, int(orig_h * scale))
+    elif width_px and not height_px:
+        scale = width_px / orig_w
+        new_w = width_px
+        new_h = max(1, int(orig_h * scale))
+    elif height_px and not width_px:
+        scale = height_px / orig_h
+        new_h = height_px
+        new_w = max(1, int(orig_w * scale))
+    else:
+        # Fallback: no resizing
+        return img
 
-    return img
+    resized = img.resize((new_w, new_h), Image.LANCZOS)
+
+    # --- Paste onto a white canvas of the exact requested size ---
+    canvas_w = width_px if width_px else new_w
+    canvas_h = height_px if height_px else new_h
+    canvas = Image.new("RGB", (canvas_w, canvas_h), "white")
+
+    # Center the barcode on the canvas
+    offset_x = (canvas_w - new_w) // 2
+    offset_y = (canvas_h - new_h) // 2
+    canvas.paste(resized, (offset_x, offset_y))
+
+    return canvas
 
 
 def create_zip_of_barcodes(
