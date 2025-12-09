@@ -88,7 +88,9 @@ def generate_barcode_image(
     # Measure text size
     dummy_img = Image.new("RGB", (1, 1))
     draw_dummy = ImageDraw.Draw(dummy_img)
-    text_w, text_h = draw_dummy.textsize(barcode_value, font=font)
+    bbox = draw_dummy.textbbox((0, 0), barcode_value, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
 
     # Add some horizontal padding so digits don't touch edge
     text_padding_x = 10
