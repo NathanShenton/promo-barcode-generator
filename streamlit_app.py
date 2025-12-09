@@ -70,7 +70,7 @@ def generate_barcode_image(
             "format": "JPEG",
             "dpi": dpi,
             "module_width": 0.2,     # width of narrow bar
-            "module_height": 30.0,   # bar height (not insanely tall)
+            "module_height": 12.0,   # bar height (not insanely tall)
             "quiet_zone": 10.0,      # margin left/right so nothing is cut off
             "write_text": False,     # IMPORTANT: we draw text ourselves
         },
@@ -81,8 +81,9 @@ def generate_barcode_image(
     # 2️⃣ Create a text strip underneath
     # Use default font (no external files needed)
     try:
-        font = ImageFont.load_default()
-    except Exception:
+        font = ImageFont.truetype("arial.ttf", 24)   # if available
+    except:
+        # Fallback: scale default bitmap font manually
         font = ImageFont.load_default()
 
     # Measure text size
