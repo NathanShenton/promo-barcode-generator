@@ -1,5 +1,6 @@
 import io
 import zipfile
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -29,9 +30,10 @@ def parse_pasted_data(text: str) -> pd.DataFrame:
     return df
 
 
-def validate_dataframe(df: pd.DataFrame) -> tuple[bool, str]:
+def validate_dataframe(df: pd.DataFrame):
     """
     Ensure required columns exist.
+    Returns (is_valid: bool, message: str).
     """
     required_cols = {"Barcode", "JPEG Name"}
     if df.empty:
@@ -40,21 +42,19 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[bool, str]:
     if not required_cols.issubset(df.columns):
         return False, f"Data must contain columns: {', '.join(required_cols)}"
 
-    # Optionally, you could also drop rows where Barcode/JPEG Name is missing
     return True, ""
 
 
 def generate_barcode_image(
     barcode_value: str,
     dpi: int,
-    width_px: int | None,
-    height_px: int | None,
+    width_px: Optional[int],
+    height_px: Optional[int],
 ) -> Image.Image:
     """
     Generate a PIL Image for a given barcode value.
     Uses Code128 and resizes to requested dimensions if provided.
     """
-    # Generate barcode into an in-memory buffer as JPEG
     buffer = io.BytesIO()
     code = Code128(barcode_value, writer=ImageWriter())
     code.write(
@@ -62,7 +62,6 @@ def generate_barcode_image(
         {
             "format": "JPEG",
             "dpi": dpi,
-            # You can tweak these for "density" of bars vs size
             "module_width": 0.2,
             "module_height": 15,
             "font_size": 12,
@@ -73,7 +72,6 @@ def generate_barcode_image(
     buffer.seek(0)
     img = Image.open(buffer)
 
-    # If user specified dimensions, resize
     if width_px and height_px:
         img = img.resize((width_px, height_px), Image.LANCZOS)
 
@@ -83,8 +81,8 @@ def generate_barcode_image(
 def create_zip_of_barcodes(
     df: pd.DataFrame,
     dpi: int,
-    width_px: int | None,
-    height_px: int | None,
+    width_px: Optional[int],
+    height_px: Optional[int],
 ) -> bytes:
     """
     Generate a ZIP file (as bytes) containing one JPEG per row in df.
@@ -93,15 +91,13 @@ def create_zip_of_barcodes(
     zip_buffer = io.BytesIO()
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
-        for idx, row in df.iterrows():
+        for _, row in df.iterrows():
             barcode_value = str(row["Barcode"]).strip()
             jpeg_name = str(row["JPEG Name"]).strip()
 
             if not barcode_value or not jpeg_name:
-                # Skip rows that don't have both values
                 continue
 
-            # Generate barcode image
             img = generate_barcode_image(
                 barcode_value=barcode_value,
                 dpi=dpi,
@@ -109,15 +105,16 @@ def create_zip_of_barcodes(
                 height_px=height_px,
             )
 
-            # Save image to in-memory buffer
             img_bytes = io.BytesIO()
             img.save(img_bytes, format="JPEG")
             img_bytes.seek(0)
 
-            # Ensure file name ends with .jpg
-            filename = f"{jpeg_name}.jpg" if not jpeg_name.lower().endswith(".jpg") else jpeg_name
+            filename = (
+                f"{jpeg_name}.jpg"
+                if not jpeg_name.lower().endswith(".jpg")
+                else jpeg_name
+            )
 
-            # Add to ZIP
             zipf.writestr(filename, img_bytes.read())
 
     zip_buffer.seek(0)
@@ -126,7 +123,11 @@ def create_zip_of_barcodes(
 
 # ------------- Streamlit UI ------------- #
 
-st.set_page_config(page_title="Bulk Barcode JPEG Generator", page_icon="🏷️", layout="centered")
+st.set_page_config(
+    page_title="Bulk Barcode JPEG Generator",
+    page_icon="🏷️",
+    layout="centered",
+)
 
 st.title("🏷️ Bulk Barcode JPEG Generator")
 
@@ -135,13 +136,145 @@ st.markdown(
 Upload a **CSV** or **paste data** with columns:
 
 - `Barcode` – the full barcode string (e.g. `T0125123126021725551630`)
-- `JPEG Name` – the desired **file name** for the JPEG (without extension)
+- `JPEG Name` – the desired file name (without extension)
 
-Example:
+Example (tab-separated):
 
-```text
-Barcode\tJPEG Name
-T0125123126021725551630\t25_off_55_uk
-T0125123126021724351635\t24_off_35_uk
-T0525123126021710154362\t10_off_15_roi
+Barcode\tJPEG Name  
+T0125123126021725551630\t25_off_55_uk  
+T0125123126021724351635\t24_off_35_uk  
+T0525123126021710154362\t10_off_15_roi  
 T0525123126021710204367\t10_off_20_roi
+"""
+)
+
+st.header("1. Provide your data")
+
+tab_csv, tab_paste = st.tabs(["📂 Upload CSV", "📝 Paste data"])
+
+df = pd.DataFrame()
+uploaded_file = None
+pasted_text = ""
+
+# --- CSV upload tab ---
+with tab_csv:
+    uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+        except Exception as e:
+            st.error(f"Error reading CSV file: {e}")
+
+# --- Paste data tab ---
+with tab_paste:
+    pasted_text = st.text_area(
+        "Paste your table here (tab- or comma-separated, include header row)",
+        height=200,
+        placeholder=(
+            "Barcode\tJPEG Name\n"
+            "T0125123126021725551630\t25_off_55_uk\n"
+            "T0125123126021724351635\t24_off_35_uk\n"
+            "T0525123126021710154362\t10_off_15_roi\n"
+            "T0525123126021710204367\t10_off_20_roi"
+        ),
+    )
+    if pasted_text.strip():
+        try:
+            pasted_df = parse_pasted_data(pasted_text)
+            if df.empty:
+                df = pasted_df
+        except Exception as e:
+            st.error(f"Error parsing pasted data: {e}")
+
+valid, msg = validate_dataframe(df)
+
+if not valid and (uploaded_file is not None or pasted_text.strip()):
+    st.error(msg)
+
+if valid:
+    st.subheader("Preview of input data")
+    st.dataframe(df.head())
+
+st.header("2. Configure barcode output")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    dpi = st.number_input(
+        "DPI (resolution)",
+        min_value=72,
+        max_value=1200,
+        value=300,
+        step=10,
+        help="Higher DPI = sharper image",
+    )
+
+with col2:
+    resize_option = st.selectbox(
+        "Image size",
+        ["Auto", "Custom (pixels)"],
+    )
+
+width_px: Optional[int] = None
+height_px: Optional[int] = None
+
+if resize_option == "Custom (pixels)":
+    c1, c2 = st.columns(2)
+    with c1:
+        width_px = st.number_input(
+            "Width (pixels)",
+            min_value=100,
+            max_value=5000,
+            value=600,
+            step=10,
+        )
+    with c2:
+        height_px = st.number_input(
+            "Height (pixels)",
+            min_value=50,
+            max_value=5000,
+            value=300,
+            step=10,
+        )
+
+st.header("3. Generate barcodes")
+
+if valid:
+    if st.button("🚀 Generate JPEGs & create ZIP"):
+        with st.spinner("Generating barcodes..."):
+            try:
+                zip_bytes = create_zip_of_barcodes(
+                    df=df,
+                    dpi=dpi,
+                    width_px=width_px,
+                    height_px=height_px,
+                )
+
+                st.success("Barcodes generated successfully!")
+
+                st.download_button(
+                    label="⬇️ Download ZIP of JPEGs",
+                    data=zip_bytes,
+                    file_name="barcodes_jpegs.zip",
+                    mime="application/zip",
+                )
+
+                st.subheader("Preview (first few barcodes)")
+                for _, row in df.head(3).iterrows():
+                    barcode_value = str(row["Barcode"]).strip()
+                    jpeg_name = str(row["JPEG Name"]).strip()
+                    if not barcode_value or not jpeg_name:
+                        continue
+                    img = generate_barcode_image(
+                        barcode_value=barcode_value,
+                        dpi=dpi,
+                        width_px=width_px,
+                        height_px=height_px,
+                    )
+                    st.caption(f"`{jpeg_name}.jpg` — {barcode_value}")
+                    st.image(img)
+
+            except Exception as e:
+                st.error(f"Error generating barcodes: {e}")
+else:
+    st.info("Upload a CSV or paste data to begin.")
